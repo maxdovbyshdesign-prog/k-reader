@@ -8,7 +8,7 @@ import { motion } from 'motion/react';
 import { Settings, Server, RefreshCw, Eye, BookOpen, Terminal, CheckCircle2, AlertCircle, Play, Square, Loader2, HelpCircle, Download } from 'lucide-react';
 import { AppSettings, Voice } from '../types';
 import { saveSettings } from '../lib/db';
-import { PiperTTSProvider, BrowserTTSProvider, PIPER_VOICES } from '../lib/tts';
+import { PiperTTSProvider, BrowserTTSProvider, PIPER_VOICES, getAssetPath } from '../lib/tts';
 
 interface SettingsViewProps {
   key?: string;
@@ -48,9 +48,7 @@ export default function SettingsView({ settings, onUpdateSettings }: SettingsVie
   const checkCacheStatus = async (voiceId: string) => {
     try {
       const cache = await caches.open('piper-models-cache');
-      const baseUrl = (import.meta as any).env.BASE_URL || '/';
-      const cleanBase = baseUrl.endsWith('/') ? baseUrl : baseUrl + '/';
-      const modelUrl = `${window.location.origin}${cleanBase}models/piper/${voiceId}.onnx`;
+      const modelUrl = getAssetPath(`models/piper/${voiceId}.onnx`);
       const cached = await cache.match(modelUrl);
       setIsVoiceCached(!!cached);
     } catch (e) {

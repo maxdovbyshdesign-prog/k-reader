@@ -20,7 +20,15 @@ export function getAssetPath(relativePath: string): string {
   const baseUrl = (import.meta as any).env.BASE_URL || '/';
   const cleanBase = baseUrl.endsWith('/') ? baseUrl : baseUrl + '/';
   const cleanRelative = relativePath.startsWith('/') ? relativePath.slice(1) : relativePath;
-  return `${cleanBase}${cleanRelative}`;
+  const resolvedPath = `${cleanBase}${cleanRelative}`;
+  if (typeof window !== 'undefined') {
+    try {
+      return new URL(resolvedPath, window.location.href).href;
+    } catch (e) {
+      return resolvedPath;
+    }
+  }
+  return resolvedPath;
 }
 
 export function numberToRussianWords(num: number): string {
@@ -387,24 +395,26 @@ export class BrowserTTSProvider implements TTSProvider {
   }
 }
 
-/**
- * Cache Storage helper with real-time download tracking.
- */
-async function fetchWithCache(url: string, onProgress?: (percent: number) => void): Promise<ArrayBuffer> {
-  const cacheName = 'piper-models-cache';
-  try {
-    const cache = await caches.open(cacheName);
-    const cachedResponse = await cache.match(url);
-    if (cachedResponse) {
-      if (onProgress) onProgress(100);
-      return await cachedResponse.arrayBuffer();
-    }
-  } catch (e) {
-    console.warn('Кэш браузера недоступен, загружаем напрямую:', e);
+function getHuggingFaceUrl(voiceId: string, extension: 'json' | 'onnx'): string {
+  const parts = voiceId.split('-'); // e.g. ['ru_RU', 'dmitry', 'medium']
+  if (parts.length === 3) {
+    const lang = parts[0];     // 'ru_RU'
+    const name = parts[1];     // 'dmitry'
+    const quality = parts[2];  // 'medium'
+    return `https://huggingface.co/rhasspy/piper-voices/resolve/main/${lang}/${name}/${quality}/${voiceId}.${extension}`;
   }
+  return `https://huggingface.co/rhasspy/piper-voices/resolve/main/${voiceId}.${extension}`;
+}
 
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Не удалось загрузить файл: ${url}`);
+/**
+ * Helper to read response body stream with progress monitoring.
+ */
+async function readResponseWithProgress(
+  response: Response,
+  url: string,
+  cacheName: string,
+  onProgress?: (percent: number) => void
+): Promise<ArrayBuffer> {
   const contentLength = response.headers.get('content-length');
   const total = contentLength ? parseInt(contentLength, 10) : 0;
 
@@ -453,6 +463,88 @@ async function fetchWithCache(url: string, onProgress?: (percent: number) => voi
 }
 
 /**
+ * Cache Storage helper with real-time download tracking and HuggingFace CDN fallback.
+ */
+async function fetchWithCache(
+  url: string,
+  onProgress?: (percent: number) => void,
+  voiceId?: string,
+  extension?: 'json' | 'onnx'
+): Promise<ArrayBuffer> {
+  const cacheName = 'piper-models-cache';
+  
+  // 1. Try Cache match on original local URL
+  try {
+    const cache = await caches.open(cacheName);
+    const cachedResponse = await cache.match(url);
+    if (cachedResponse) {
+      if (onProgress) onProgress(100);
+      return await cachedResponse.arrayBuffer();
+    }
+  } catch (e) {
+    console.warn('Кэш браузера недоступен:', e);
+  }
+
+  // 2. Try Cache match on HuggingFace URL as well
+  let hfUrl = '';
+  if (voiceId && extension) {
+    hfUrl = getHuggingFaceUrl(voiceId, extension);
+    try {
+      const cache = await caches.open(cacheName);
+      const cachedResponse = await cache.match(hfUrl);
+      if (cachedResponse) {
+        if (onProgress) onProgress(100);
+        return await cachedResponse.arrayBuffer();
+      }
+    } catch (e) {}
+  }
+
+  // 3. Try fetching from original local URL
+  try {
+    const response = await fetch(url);
+    if (response.ok) {
+      const buffer = await readResponseWithProgress(response, url, cacheName, onProgress);
+      // Double cache under HF URL if applicable
+      if (hfUrl) {
+        try {
+          const cache = await caches.open(cacheName);
+          await cache.put(hfUrl, new Response(buffer.slice(0)));
+        } catch (e) {}
+      }
+      return buffer;
+    }
+  } catch (e) {
+    console.warn(`Local fetch failed for ${url}, trying Hugging Face...`, e);
+  }
+
+  // 4. Try fetching from HuggingFace CDN
+  if (hfUrl) {
+    console.log(`Fetching from Hugging Face: ${hfUrl}`);
+    try {
+      let response = await fetch(hfUrl);
+      if (!response.ok && extension === 'json') {
+        const altHfUrl = hfUrl.replace('.json', '.onnx.json');
+        console.log(`JSON failed, trying alternate HF URL: ${altHfUrl}`);
+        response = await fetch(altHfUrl);
+      }
+      if (response.ok) {
+        const buffer = await readResponseWithProgress(response, hfUrl, cacheName, onProgress);
+        // Double cache under local URL so SettingsView check matches correctly
+        try {
+          const cache = await caches.open(cacheName);
+          await cache.put(url, new Response(buffer.slice(0)));
+        } catch (e) {}
+        return buffer;
+      }
+    } catch (e) {
+      console.warn(`HuggingFace fetch failed for ${hfUrl}`, e);
+    }
+  }
+
+  throw new Error(`Не удалось загрузить файл ни из локального хранилища, ни с Hugging Face.`);
+}
+
+/**
  * Piper Web Neural TTS Provider (Client-only ONNX Runtime Web).
  */
 export class PiperTTSProvider implements TTSProvider {
@@ -493,7 +585,7 @@ export class PiperTTSProvider implements TTSProvider {
         if (this.onProgress) {
           this.onProgress({ type: 'downloading', message: 'Скачивание настроек голоса...', progress: Math.min(10, Math.round(p / 10)) });
         }
-      });
+      }, voiceId, 'json');
       const configJson = JSON.parse(new TextDecoder().decode(configBuffer));
       PiperTTSProvider.configCache[voiceId] = configJson;
 
@@ -509,7 +601,7 @@ export class PiperTTSProvider implements TTSProvider {
           const progress = 10 + Math.round((p / 100) * 80);
           this.onProgress({ type: 'downloading', message: `Загрузка нейросетевой модели (${voiceId})... ${p}%`, progress });
         }
-      });
+      }, voiceId, 'onnx');
 
       if (this.onProgress) {
         this.onProgress({ type: 'compiling', message: 'Загрузка библиотек ONNX и компиляция модели в браузере...', progress: 92 });
