@@ -401,7 +401,8 @@ function getHuggingFaceUrl(voiceId: string, extension: 'json' | 'onnx'): string 
     const lang = parts[0];     // 'ru_RU'
     const name = parts[1];     // 'dmitry'
     const quality = parts[2];  // 'medium'
-    return `https://huggingface.co/rhasspy/piper-voices/resolve/main/${lang}/${name}/${quality}/${voiceId}.${extension}`;
+    const langPrefix = lang.split('_')[0]; // 'ru'
+    return `https://huggingface.co/rhasspy/piper-voices/resolve/main/${langPrefix}/${lang}/${name}/${quality}/${voiceId}.${extension}`;
   }
   return `https://huggingface.co/rhasspy/piper-voices/resolve/main/${voiceId}.${extension}`;
 }
