@@ -479,8 +479,14 @@ async function fetchWithCache(
     const cache = await caches.open(cacheName);
     const cachedResponse = await cache.match(url);
     if (cachedResponse) {
-      if (onProgress) onProgress(100);
-      return await cachedResponse.arrayBuffer();
+      const contentType = cachedResponse.headers.get('content-type') || '';
+      if (contentType.includes('text/html')) {
+        console.warn(`Deleting invalid HTML response from cache for: ${url}`);
+        await cache.delete(url);
+      } else {
+        if (onProgress) onProgress(100);
+        return await cachedResponse.arrayBuffer();
+      }
     }
   } catch (e) {
     console.warn('Кэш браузера недоступен:', e);
@@ -494,8 +500,14 @@ async function fetchWithCache(
       const cache = await caches.open(cacheName);
       const cachedResponse = await cache.match(hfUrl);
       if (cachedResponse) {
-        if (onProgress) onProgress(100);
-        return await cachedResponse.arrayBuffer();
+        const contentType = cachedResponse.headers.get('content-type') || '';
+        if (contentType.includes('text/html')) {
+          console.warn(`Deleting invalid HTML response from cache for: ${hfUrl}`);
+          await cache.delete(hfUrl);
+        } else {
+          if (onProgress) onProgress(100);
+          return await cachedResponse.arrayBuffer();
+        }
       }
     } catch (e) {}
   }
@@ -503,16 +515,23 @@ async function fetchWithCache(
   // 3. Try fetching from original local URL
   try {
     const response = await fetch(url);
-    if (response.ok) {
+    const contentType = response.headers.get('content-type') || '';
+    if (response.ok && !contentType.includes('text/html')) {
       const buffer = await readResponseWithProgress(response, url, cacheName, onProgress);
       // Double cache under HF URL if applicable
       if (hfUrl) {
         try {
           const cache = await caches.open(cacheName);
-          await cache.put(hfUrl, new Response(buffer.slice(0)));
+          await cache.put(hfUrl, new Response(buffer.slice(0), {
+            headers: {
+              'Content-Type': extension === 'json' ? 'application/json' : 'application/octet-stream'
+            }
+          }));
         } catch (e) {}
       }
       return buffer;
+    } else {
+      console.warn(`Local file ${url} not found or returned HTML page. Switching to Hugging Face CDN.`);
     }
   } catch (e) {
     console.warn(`Local fetch failed for ${url}, trying Hugging Face...`, e);
@@ -523,19 +542,27 @@ async function fetchWithCache(
     console.log(`Fetching from Hugging Face: ${hfUrl}`);
     try {
       let response = await fetch(hfUrl);
+      let contentType = response.headers.get('content-type') || '';
       if (!response.ok && extension === 'json') {
         const altHfUrl = hfUrl.replace('.json', '.onnx.json');
         console.log(`JSON failed, trying alternate HF URL: ${altHfUrl}`);
         response = await fetch(altHfUrl);
+        contentType = response.headers.get('content-type') || '';
       }
-      if (response.ok) {
+      if (response.ok && !contentType.includes('text/html')) {
         const buffer = await readResponseWithProgress(response, hfUrl, cacheName, onProgress);
         // Double cache under local URL so SettingsView check matches correctly
         try {
           const cache = await caches.open(cacheName);
-          await cache.put(url, new Response(buffer.slice(0)));
+          await cache.put(url, new Response(buffer.slice(0), {
+            headers: {
+              'Content-Type': extension === 'json' ? 'application/json' : 'application/octet-stream'
+            }
+          }));
         } catch (e) {}
         return buffer;
+      } else {
+        console.warn(`Hugging Face resolved with error or HTML for ${hfUrl}`);
       }
     } catch (e) {
       console.warn(`HuggingFace fetch failed for ${hfUrl}`, e);

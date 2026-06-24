@@ -42,6 +42,9 @@ export default function SettingsView({ settings, onUpdateSettings }: SettingsVie
   useEffect(() => {
     if (settings.ttsProviderId === 'piper') {
       checkCacheStatus(settings.voiceId || 'ru_RU-dmitry-medium');
+      setDownloadType('idle');
+      setDownloadStatus('');
+      setDownloadProgress(null);
     }
   }, [settings.ttsProviderId, settings.voiceId]);
 
