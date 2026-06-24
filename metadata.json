@@ -1,0 +1,6 @@
+{
+  "name": "Ksyusha Reader",
+  "description": "Твоя личная говорящая библиотека. A simple, cozy private audiobook-style reader for mobile and desktop.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
